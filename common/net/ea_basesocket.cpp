@@ -15,6 +15,7 @@ CBaseSocket::CBaseSocket(int socketType)
     , m_nPort(0)
     , m_eSocketType(socketType)
     , m_szIp()
+    , m_bAsync(false)
 {
 }
 

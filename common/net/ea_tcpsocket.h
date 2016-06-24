@@ -15,9 +15,14 @@
 #include <net/ea_basesocket.h>
 
 namespace sdk {
+
+namespace thread {
+    class CCriticalSection;
+}
+
 namespace net {    
 
-typedef int socket_t;
+class IBuffer;
 
 class CTcpSocket
     : public CBaseSocket
@@ -27,7 +32,8 @@ public:
     virtual ~CTcpSocket();
 
     virtual bool Listen(const char * szIp, int port);
-    virtual bool Connect(const char * szIp, int port, bool asnyc = false);
+    virtual bool Connect(const char * szIp, int port, bool async = false);
+    virtual size_t Read(char * buf, size_t bufsize);
     virtual bool Write(const char * pdata, size_t size);
     virtual bool Close();
     virtual void SetTimeout(int timeo);
@@ -37,7 +43,9 @@ public:
     virtual void onError();
 
 private:
-    
+    IBuffer * m_pRcvBuffer;
+    IBuffer * m_pSendBuffer;
+    thread::CCriticalSection * m_pLock;
 };
 
 }   // namespace  
