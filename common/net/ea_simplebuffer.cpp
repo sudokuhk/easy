@@ -56,7 +56,7 @@ void CSimpleBuffer::append(char * data, size_t size)
         capac = newcap;
         pbuffer = ptr;
     }
-    memcpy(pbuffer + woff, data, size);
+    memmove(pbuffer + woff, data, size);
     woff += size;
 }
 

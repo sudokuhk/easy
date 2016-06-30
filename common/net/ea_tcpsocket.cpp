@@ -201,7 +201,11 @@ bool CTcpSocket::Write(const char * pdata, size_t size)
     }
     
     if (m_bAsync) {
-        m_pSendBuffer->append(const_cast<char *>(pdata), size);
+        size_t wrisize = ::write(m_tSocket, pdata, size);
+        if (wrisize < size) {
+            m_pSendBuffer->append(const_cast<char *>(pdata + wrisize), 
+                size - wrisize);
+        }
         return true;
     } else {
         if (::write(m_tSocket, pdata, size) < 0) {
@@ -215,6 +219,7 @@ bool CTcpSocket::Write(const char * pdata, size_t size)
 
 bool CTcpSocket::Close()
 {
+    LOG_PRINT(log_debug, "close socket(%d)..!", m_tSocket);
     if (m_tSocket > 0) {
         close(m_tSocket);
         m_tSocket = -1;
@@ -249,11 +254,41 @@ CBaseSocket * CTcpSocket::Accept()
     return new CTcpSocket(cli, NULL, buf, port);
 }
 
-int CTcpSocket::onRead()
+void CTcpSocket::onRead()
 {
+    char * ptr = m_pRcvBuffer->tail();
+    size_t remain = m_pRcvBuffer->freesize();
+
+    size_t addlen = 10 * 1024;
+    char buf[10 * 1024];
+    ssize_t rcv_len = read(m_tSocket, buf, addlen);
+
+    if (rcv_len == 0) {
+        LOG_PRINT(log_info, "socket reset by peer!");
+        Close();
+
+        if (m_pHandler != NULL) {
+            m_pHandler->OnClose(this);
+        }
+        return;
+    }
+
+    if (rcv_len > 0) {
+        m_pRcvBuffer->append(buf, rcv_len);
+    }
+    
+    if (m_pHandler != NULL) {
+        ssize_t dealsize = m_pHandler->OnRead(this, 
+            m_pRcvBuffer->data(), m_pRcvBuffer->size());
+        
+        LOG_PRINT(log_debug, "handle read size:%d!", dealsize);
+        if (dealsize >= 0) {
+            m_pRcvBuffer->erase(0, dealsize);
+        }
+    }
 }
 
-int CTcpSocket::onWrite()
+void CTcpSocket::onWrite()
 {
 }
 
@@ -263,29 +298,29 @@ void CTcpSocket::onError()
 
 void CTcpSocket::OnAccept()
 {
-    if (m_pHandler) {
-        int cnt = 10;
-        struct sockaddr_in sockaddr;
-        
+    int cnt = 10;
+    struct sockaddr_in sockaddr;
     
-        while (cnt > 0) {
-            memset(&sockaddr, 0, sizeof(struct sockaddr_in));
-            socklen_t len = 0; 
-            socket_t cli = accept(m_tSocket, (struct sockaddr *)&sockaddr, &len);
+    //accept 10 client socket once time.
+    while (cnt > 0) {
+        memset(&sockaddr, 0, sizeof(struct sockaddr_in));
+        socklen_t len = 0; 
+        socket_t cli = accept(m_tSocket, (struct sockaddr *)&sockaddr, &len);
 
-            if (cli < 0) {
-                return;
-            }
-            
-            char buf[16];
-            net_ntoa(buf, sockaddr.sin_addr);
-            int port = ntohs(sockaddr.sin_port);
-            
-            LOG_PRINT(log_info, "accept [%s:%d]", buf, port);
-    
-            m_pHandler->OnAccept(new CTcpSocket(cli));
-            cnt --;
+        if (cli < 0) {
+            return;
         }
+        
+        char buf[16];
+        net_ntoa(buf, sockaddr.sin_addr);
+        int port = ntohs(sockaddr.sin_port);
+        
+        LOG_PRINT(log_info, "accept [%s:%d]", buf, port);
+
+        if (m_pHandler) {
+            m_pHandler->OnAccept(this, new CTcpSocket(cli));
+        }
+        cnt --;
     }
 }
 

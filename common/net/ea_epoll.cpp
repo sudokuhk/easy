@@ -8,11 +8,15 @@
 #include <net/ea_epoll.h>
 
 #include <log/ea_log.h>
+#include <thread/ea_criticalsection.h>
 
 #include <time.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
+#include <sys/types.h>          /* See NOTES */
+#include <sys/socket.h>
+
 
 namespace sdk {
 namespace net {
@@ -26,6 +30,8 @@ CEpoll::CEpoll(size_t maxfd)
     , m_bRunning(false)
     , m_nMaxfd(maxfd)
 {
+    m_tpair[0]  = m_tpair[1] = -1;
+    m_pLock     = thread::CCriticalSection::CreateCriticalSection();
 }
 
 CEpoll::~CEpoll()
@@ -33,6 +39,17 @@ CEpoll::~CEpoll()
     if (m_pEvents) {
         free(m_pEvents);
         m_pEvents = NULL;
+    }
+
+    if (m_tpair[0] > 0) {
+        close(m_tpair[0]);
+        close(m_tpair[1]);
+        m_tpair[0] = m_tpair[1] = -1;
+    }
+
+    if (m_pLock) {
+        delete m_pLock;
+        m_pLock = NULL;
     }
 }
 
@@ -47,6 +64,7 @@ bool CEpoll::AddEvent(CBaseSocket * socket, int mask)
     struct epoll_event ev;
     int op = 0, oldmask = EA_NONE;
 
+    m_pLock->Enter();
     SocketContainer::iterator it = m_cSockets.find(socket);
     if (it != m_cSockets.end()) {
         oldmask = it->second;
@@ -54,6 +72,7 @@ bool CEpoll::AddEvent(CBaseSocket * socket, int mask)
     } else {
         m_cSockets[socket] = mask;
     }
+    m_pLock->Leave();
 
     mask |= oldmask;
     op = oldmask == EA_NONE ? EPOLL_CTL_ADD : EPOLL_CTL_MOD;
@@ -83,11 +102,13 @@ bool CEpoll::DelEvent(CBaseSocket * socket, int mask)
     struct epoll_event ev;
     int op = 0, oldmask = EA_NONE;
 
+    m_pLock->Enter();
     SocketContainer::iterator it = m_cSockets.find(socket);
     if (it != m_cSockets.end()) {
         oldmask = it->second;
         it->second &= ~mask;
     } 
+    m_pLock->Leave();
 
     op = (mask == EA_NONE) ? EPOLL_CTL_DEL : EPOLL_CTL_MOD;
     ev.events   = 0;
@@ -135,17 +156,46 @@ bool CEpoll::Init()
         goto failed;
     }
 
+    if(socketpair(AF_UNIX, SOCK_STREAM, 0, m_tpair) == -1) {
+        LOG_PRINT(log_error, "socketpair failed!(%d:%s)", 
+            errno, strerror(errno));
+        goto failed;
+    }
+
     m_iEpoll = epoll_create(m_nMaxfd);
     if (m_iEpoll < 0) {
         LOG_PRINT(log_error, "epoll create failed!(%d:%s)", 
             errno, strerror(errno));
-        return false;
+        goto failed;
     }
+
+    struct epoll_event ev;
+    ev.events   = EPOLLIN;
+    ev.data.u64 = 0;
+    ev.data.fd  = m_tpair[1];
+    
+    if (epoll_ctl(m_iEpoll, EPOLL_CTL_ADD, ev.data.fd, &ev) == -1) {
+        LOG_PRINT(log_error, "epoll_ctl failed, pair:%d, error(%d:%s)", 
+            ev.data.fd, errno, strerror(errno));
+        goto failed;
+    }
+    
     ret = true;
     LOG_PRINT(log_debug, "epoll create (%d) success!", m_iEpoll);
     
     return ret;
 failed:
+    if (m_iEpoll > 0) {
+        close(m_iEpoll);
+        m_iEpoll = -1;
+    }
+    
+    if (m_tpair[0] > 0) {
+        close(m_tpair[0]);
+        close(m_tpair[1]);
+        m_tpair[0] = m_tpair[1] = -1;
+    }
+    
     if (m_pEvents) {
         free(m_pEvents);
         m_pEvents = NULL;
@@ -156,12 +206,17 @@ failed:
 void CEpoll::Run()
 {
     LOG_PRINT(log_debug, "epoll run[%d]!", m_iEpoll);
+    if (m_iEpoll < 0) {
+        LOG_PRINT(log_error, "epoll run failed, invalid epoll fd(%d)!", m_iEpoll);
+        return;
+    }
+    
     m_bRunning = true;
 
     while (m_bRunning) {
         int retval, numevents = 0;
             
-        retval = epoll_wait(m_iEpoll, m_pEvents, m_nMaxfd, 1000);
+        retval = epoll_wait(m_iEpoll, m_pEvents, m_nMaxfd, -1);
         LOG_PRINT(log_debug, "epoll_wait return :%d!", retval);
         
         if (retval > 0) {
@@ -177,6 +232,11 @@ void CEpoll::Run()
                 if (e->events & EPOLLERR) mask |= EA_WRITABLE;
                 if (e->events & EPOLLHUP) mask |= EA_WRITABLE;
 
+                if (e->data.fd == m_tpair[1]) {
+                    LOG_PRINT(log_debug, "wake up epoll!");
+                    continue;
+                }
+
                 CBaseSocket * psocket = (CBaseSocket *)e->data.ptr;
                 onEvent(psocket, mask);
             }
@@ -188,7 +248,16 @@ void CEpoll::Run()
 void CEpoll::Stop()
 {
     LOG_PRINT(log_debug, "epoll stop!");
+    Wake();
     m_bRunning = false;
+}
+
+void CEpoll::Wake()
+{
+    m_pLock->Enter();
+    char buf = 'w';
+    ::write(m_tpair[0], (char *)&buf, 1);
+    m_pLock->Leave();
 }
 
 void CEpoll::onEvent(CBaseSocket * psocket, int mask)
@@ -199,6 +268,14 @@ void CEpoll::onEvent(CBaseSocket * psocket, int mask)
         LOG_PRINT(log_info, "epoll event, null socket event!!");
         return;
     }
+
+    m_pLock->Enter();
+    SocketContainer::iterator it = m_cSockets.find(psocket);
+    if (it == m_cSockets.end()) {
+        LOG_PRINT(log_info, "epoll on event, socket(%p) not in container!", psocket);
+        return;
+    } 
+    m_pLock->Leave();
     
     if (mask & EA_READABLE) {
         if (psocket->IsListen()) {

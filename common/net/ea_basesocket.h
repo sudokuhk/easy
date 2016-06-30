@@ -41,8 +41,8 @@ public:
     virtual bool Close() = 0;
     virtual CBaseSocket * Accept() = 0;
     
-    virtual int onRead()    = 0;
-    virtual int onWrite()   = 0;
+    virtual void onRead()   = 0;
+    virtual void onWrite()  = 0;
     virtual void onError()  = 0;
     virtual void OnAccept() = 0;
 

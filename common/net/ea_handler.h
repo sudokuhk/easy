@@ -24,10 +24,11 @@ class IHandler
 public:
     virtual  ~IHandler() {}
 
-    virtual void OnRead(const char * pdata, size_t size) = 0;
-    virtual void OnWrite(const char * pdata, size_t size) = 0;
-    virtual void OnAccept(CBaseSocket * psocket) = 0;
-    virtual void onError(int errcode) = 0;
+    virtual size_t OnRead(CBaseSocket * psocket, const char * pdata, size_t size) = 0;
+    virtual size_t OnWrite(CBaseSocket * psocket, const char * pdata, size_t size) = 0;
+    virtual void OnClose(CBaseSocket * psocket, bool passive = true) = 0;
+    virtual void OnAccept(CBaseSocket * psocket, CBaseSocket * pclient) = 0;
+    virtual void onError(CBaseSocket * psocket, int errcode) = 0;
 };
 
 }   // namespace  

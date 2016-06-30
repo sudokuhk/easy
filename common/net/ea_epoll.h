@@ -21,6 +21,11 @@
 #include <sys/epoll.h>
 
 namespace sdk {
+
+namespace thread {
+    class CCriticalSection;
+}
+
 namespace net {    
 
 class CEpoll
@@ -42,6 +47,8 @@ public:
     virtual void Run();
     virtual void Stop();
 
+    virtual void Wake();
+
 private:
     void onEvent(CBaseSocket * psocket, int mask);
     
@@ -57,6 +64,9 @@ private:
 
     bool m_bRunning;
     size_t m_nMaxfd;
+    socket_t m_tpair[2]; 
+    
+    thread::CCriticalSection * m_pLock;
 };
 
 }   // namespace  
