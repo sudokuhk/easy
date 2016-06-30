@@ -14,10 +14,16 @@
 
 #include <net/ea_basesocket.h>
 
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+
 namespace sdk {
 namespace net {    
 
 bool setNBlock(socket_t socket);
+
+char * net_ntoa(char * buf, struct in_addr in);
 
 template<typename T>
 T min(T lhs, T rhs)

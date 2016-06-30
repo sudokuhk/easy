@@ -9,6 +9,7 @@
 #include <log/ea_log.h>
 #include <net/ea_nethelper.h>
 #include <net/ea_simplebuffer.h>
+#include <net/ea_handler.h>
 
 #include <thread/ea_criticalsection.h>
 
@@ -22,9 +23,22 @@
 namespace sdk {
 namespace net {
 
-CTcpSocket::CTcpSocket()
-    : CBaseSocket(TYPE_TCP)
+CTcpSocket::CTcpSocket(IHandler * handler/* = NULL*/)
+    : CBaseSocket(TYPE_TCP, handler)
 {
+    m_pLock         = thread::CCriticalSection::CreateCriticalSection();
+    m_pRcvBuffer    = IBuffer::CreateBuffer();
+    m_pSendBuffer   = IBuffer::CreateBuffer();
+}
+
+CTcpSocket::CTcpSocket(socket_t sfd, IHandler * handler, 
+    const char * szip, int port)
+    : CBaseSocket(TYPE_TCP, handler)
+{
+    m_tSocket = sfd;
+    strncpy(m_szIp, szip, min(strlen(szip), (size_t)128));
+    m_nPort = port;
+
     m_pLock         = thread::CCriticalSection::CreateCriticalSection();
     m_pRcvBuffer    = IBuffer::CreateBuffer();
     m_pSendBuffer   = IBuffer::CreateBuffer();
@@ -32,6 +46,11 @@ CTcpSocket::CTcpSocket()
 
 CTcpSocket::~CTcpSocket()
 {
+    if (m_tSocket >= 0) {
+        close(m_tSocket);
+        m_tSocket = -1;
+    }
+    
     if (m_pLock) {
         delete m_pLock; m_pLock = NULL;
     }
@@ -43,14 +62,68 @@ CTcpSocket::~CTcpSocket()
     }
 }
 
-bool CTcpSocket::Listen(const char * szIp, int port)
+bool CTcpSocket::Listen(const char * szIp, int port, bool async/* = false*/)
 {
+    bool ret = false;
+    m_tSocket = -1;
+    
     if (szIp == NULL || strlen(szIp) == 0 || port == 0) {
         LOG_PRINT(log_error, "invalid ip/port(%d)", port);
+        goto failed;
+    }
+    
+    strncpy(m_szIp, szIp, min(strlen(szIp), (size_t)128));
+    m_nPort     = port;
+    m_bAsync    = async;
+
+    LOG_PRINT(log_debug, "listen [%s:%d]", szIp, port);
+    m_tSocket = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (m_tSocket < 0) {
+        LOG_PRINT(log_error, "create socket failed!");
         return false;
     }
 
+    struct sockaddr_in sockaddr;
+    sockaddr.sin_family         = AF_INET;
+    sockaddr.sin_port           = htons(port);
+    sockaddr.sin_addr.s_addr    = inet_addr(szIp);
+    int flag, len;
+    flag = 1;
+    len = sizeof(flag);
+
+    if(setsockopt(m_tSocket, SOL_SOCKET, SO_REUSEADDR, &flag, len) == -1) {
+        LOG_PRINT(log_error, "reuse addr socket failed!");
+        goto failed;
+    }
+
+    if(bind(m_tSocket, (struct sockaddr*)&sockaddr, sizeof(sockaddr)) == -1) {
+        LOG_PRINT(log_error, "bind socket failed!");
+        goto failed;
+    }
+
+    if(listen(m_tSocket, 0) == -1) { 
+        LOG_PRINT(log_error, "listen socket failed!");
+        goto failed;
+    }
+
+    if (m_bAsync) {
+        setNBlock(m_tSocket);
+    }
+
+    LOG_PRINT(log_debug, "listen sicceed, fd:%d!", m_tSocket);
+    ret       = true;
+    m_bListen = true;
     
+    return ret;
+    
+failed:
+    if (m_tSocket >= 0) {
+        close(m_tSocket);
+        m_tSocket = -1;
+    }
+    LOG_PRINT(log_error, "create listen failed!");
+    return ret;
 }
 
 bool CTcpSocket::Connect(const char * szIp, int port, bool async/* = false*/)
@@ -152,6 +225,30 @@ void CTcpSocket::SetTimeout(int timeo)
 {
 }
 
+void CTcpSocket::SetHandler(IHandler * handler)
+{
+    m_pHandler = handler;
+}
+
+CBaseSocket * CTcpSocket::Accept()
+{
+    if (m_bAsync) {
+        return NULL;
+    }
+    
+    struct sockaddr_in sockaddr;
+    socklen_t len = 0; 
+    memset(&sockaddr, 0, sizeof(struct sockaddr_in));
+    socket_t cli = accept(m_tSocket, (struct sockaddr *)&sockaddr, &len);
+
+    char buf[16];
+    net_ntoa(buf, sockaddr.sin_addr);
+    int port = ntohs(sockaddr.sin_port);
+    
+    LOG_PRINT(log_info, "accept [%s:%d]", buf, port);
+    return new CTcpSocket(cli, NULL, buf, port);
+}
+
 int CTcpSocket::onRead()
 {
 }
@@ -163,6 +260,35 @@ int CTcpSocket::onWrite()
 void CTcpSocket::onError()
 {
 }
+
+void CTcpSocket::OnAccept()
+{
+    if (m_pHandler) {
+        int cnt = 10;
+        struct sockaddr_in sockaddr;
+        
+    
+        while (cnt > 0) {
+            memset(&sockaddr, 0, sizeof(struct sockaddr_in));
+            socklen_t len = 0; 
+            socket_t cli = accept(m_tSocket, (struct sockaddr *)&sockaddr, &len);
+
+            if (cli < 0) {
+                return;
+            }
+            
+            char buf[16];
+            net_ntoa(buf, sockaddr.sin_addr);
+            int port = ntohs(sockaddr.sin_port);
+            
+            LOG_PRINT(log_info, "accept [%s:%d]", buf, port);
+    
+            m_pHandler->OnAccept(new CTcpSocket(cli));
+            cnt --;
+        }
+    }
+}
+
 
 }   // namespace net 
 }   // namespace sdk

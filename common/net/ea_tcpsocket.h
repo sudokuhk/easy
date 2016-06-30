@@ -23,25 +23,32 @@ namespace thread {
 namespace net {    
 
 class IBuffer;
+class IHandler;
 
 class CTcpSocket
     : public CBaseSocket
 {
 public:
-    CTcpSocket();
+    CTcpSocket(IHandler * handler = NULL);
+    CTcpSocket(socket_t sfd, IHandler * handler = NULL,
+        const char * szip = "", int port = 0);
     virtual ~CTcpSocket();
 
-    virtual bool Listen(const char * szIp, int port);
+    virtual bool Listen(const char * szIp, int port, bool async = false);
     virtual bool Connect(const char * szIp, int port, bool async = false);
     virtual size_t Read(char * buf, size_t bufsize);
     virtual bool Write(const char * pdata, size_t size);
     virtual bool Close();
-    virtual void SetTimeout(int timeo);
+    virtual CBaseSocket * Accept();
     
     virtual int onRead();
     virtual int onWrite();
     virtual void onError();
+    virtual void OnAccept();
 
+    virtual void SetHandler(IHandler * handler);
+    virtual void SetTimeout(int timeo);
+    
 private:
     IBuffer * m_pRcvBuffer;
     IBuffer * m_pSendBuffer;

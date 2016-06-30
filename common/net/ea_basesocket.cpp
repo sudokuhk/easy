@@ -10,12 +10,13 @@
 namespace sdk {
 namespace net {
 
-CBaseSocket::CBaseSocket(int socketType)
+CBaseSocket::CBaseSocket(int socketType, IHandler * handler/* = NULL*/)
     : m_tSocket(-1)
     , m_nPort(0)
     , m_eSocketType(socketType)
     , m_szIp()
     , m_bAsync(false)
+    , m_pHandler(handler)
 {
 }
 
@@ -26,6 +27,11 @@ CBaseSocket::~CBaseSocket()
 socket_t CBaseSocket::GetSocket()
 {
     return m_tSocket;
+}
+
+bool CBaseSocket::IsListen()
+{
+    return m_bListen;
 }
     
 }   // namespace log 
