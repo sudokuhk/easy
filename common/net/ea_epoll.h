@@ -41,8 +41,6 @@ public:
     virtual void AddTimer(ITimer * timer);
     virtual void DelTimer(ITimer * timer);
 
-    virtual size_t GetMilliSecond();
-
     virtual bool Init();
     virtual void Run();
     virtual void Stop();
@@ -50,7 +48,8 @@ public:
     virtual void Wake();
 
 private:
-    void onEvent(CBaseSocket * psocket, int mask);
+    void OnEvent(CBaseSocket * psocket, int mask);
+    void OnTimeout();
     
 private:
     typedef std::set<ITimer *> TimerContainer;

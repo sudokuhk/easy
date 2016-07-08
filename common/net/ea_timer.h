@@ -20,18 +20,32 @@ namespace net {
 class ITimer
 {
 public:
+    ITimer();
     virtual  ~ITimer() {}
 
-    bool OnTimeout(size_t ms_now);
+    bool OnEvent(size_t ms_now);
     void SetTimeout(size_t ms_interval);
+    
+    size_t GetExpireTime() const;
+    size_t GetInterval() const;
+    
+    void SetValid(bool valid);
 
-    virtual void OnEvent() = 0;
+    virtual void OnTimeout() = 0;
     
 protected:
-    size_t m_nBaseTime;
     size_t m_nInterval;
+    size_t m_nExpireTime;
+    bool m_bValid;
 };
 
+class ITimerComapre
+{
+public:
+    int operator()(const void * lhs, const void * rhs);
+};
+
+    
 }   // namespace  
 }   // namespace sdk
 

@@ -20,6 +20,7 @@ COMMON_SOURCES = $(COMMON_PATH)/thread/ea_condition.cpp		\
 				 $(COMMON_PATH)/net/ea_nethelper.cpp	\
 				 $(COMMON_PATH)/net/ea_buffer.cpp	\
 				 $(COMMON_PATH)/net/ea_simplebuffer.cpp	\
+				 $(COMMON_PATH)/net/ea_react.cpp	\
 				 $(COMMON_PATH)/net/ea_epoll.cpp	\
 				 $(COMMON_PATH)/net/ea_timer.cpp	\
 

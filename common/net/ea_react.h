@@ -41,13 +41,13 @@ public:
     virtual void AddTimer(ITimer * timer) = 0;
     virtual void DelTimer(ITimer * timer) = 0;
 
-    virtual size_t GetMilliSecond() = 0;
-
     virtual bool Init() = 0;
     virtual void Run() = 0;
     virtual void Stop() = 0;
 
     virtual void Wake() = 0;
+
+    static size_t GetMilliSecond();
 };
 
 }   // namespace  

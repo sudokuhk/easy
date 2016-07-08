@@ -7,16 +7,16 @@
 
 #include <net/ea_epoll.h>
 
+#include <net/ea_nethelper.h>
+#include <net/ea_timer.h>
 #include <log/ea_log.h>
 #include <thread/ea_criticalsection.h>
 
-#include <time.h>
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
 #include <sys/types.h>          /* See NOTES */
 #include <sys/socket.h>
-
 
 namespace sdk {
 namespace net {
@@ -126,18 +126,33 @@ bool CEpoll::DelEvent(CBaseSocket * socket, int mask)
 
 void CEpoll::AddTimer(ITimer * timer)
 {
+    if (timer == NULL) {
+        return;
+    }
+    LOG_PRINT(log_debug, "add timer:%p, timeout:%d", timer, timer->GetInterval());
+    
+    m_pLock->Enter();
+    TimerContainer::const_iterator it = m_cTimers.find(timer);
+    if (it == m_cTimers.end()) {
+        m_cTimers.insert(timer);
+    }
+    m_pLock->Leave();
+
+    Wake();
 }
 
 void CEpoll::DelTimer(ITimer * timer)
 {
-}
+    if (timer == NULL) {
+        return;
+    }
 
-size_t CEpoll::GetMilliSecond()
-{
-    struct timespec ts;
-	clock_gettime(CLOCK_MONOTONIC, &ts);
-
-	return (ts.tv_sec * 1000 + ts.tv_nsec / 1000000);
+    m_pLock->Enter();
+    TimerContainer::const_iterator it = m_cTimers.find(timer);
+    if (it != m_cTimers.end()) {
+        m_cTimers.erase(timer);
+    }
+    m_pLock->Leave();
 }
 
 bool CEpoll::Init()
@@ -173,6 +188,8 @@ bool CEpoll::Init()
     ev.events   = EPOLLIN;
     ev.data.u64 = 0;
     ev.data.fd  = m_tpair[1];
+
+    setNBlock(m_tpair[1]);
     
     if (epoll_ctl(m_iEpoll, EPOLL_CTL_ADD, ev.data.fd, &ev) == -1) {
         LOG_PRINT(log_error, "epoll_ctl failed, pair:%d, error(%d:%s)", 
@@ -215,10 +232,31 @@ void CEpoll::Run()
 
     while (m_bRunning) {
         int retval, numevents = 0;
-            
-        retval = epoll_wait(m_iEpoll, m_pEvents, m_nMaxfd, -1);
-        LOG_PRINT(log_debug, "epoll_wait return :%d!", retval);
+
+        int timeout = -1;
+        size_t minval = 0;
+        size_t now = GetMilliSecond();
         
+        m_pLock->Enter();
+        if (m_cTimers.size() > 0) {
+            TimerContainer::const_iterator it = m_cTimers.begin();
+            LOG_PRINT(log_debug, "get min timer, expire:%d, timeval:%d!", 
+                (*it)->GetExpireTime(), (*it)->GetInterval());
+            minval = (*it)->GetExpireTime();
+            if (minval > now) {
+                timeout = minval - now;
+            } else {
+                timeout = 0;
+            }
+            ++ it;
+        }
+        m_pLock->Leave();
+        
+        LOG_PRINT(log_debug, "epoll_wait now:%d timeout:%d!", now, timeout);
+            
+        retval = epoll_wait(m_iEpoll, m_pEvents, m_nMaxfd, timeout);
+        LOG_PRINT(log_debug, "epoll_wait return :%d!", retval);
+
         if (retval > 0) {
             int j;
 
@@ -234,13 +272,19 @@ void CEpoll::Run()
 
                 if (e->data.fd == m_tpair[1]) {
                     LOG_PRINT(log_debug, "wake up epoll!");
+                    char buf[1024];
+                    int rn = ::read(m_tpair[1], buf, 1024);
+                    buf[rn] = '\0';
+                    LOG_PRINT(log_debug, "wake up times:%d:%s", rn, buf);
                     continue;
                 }
 
                 CBaseSocket * psocket = (CBaseSocket *)e->data.ptr;
-                onEvent(psocket, mask);
+                OnEvent(psocket, mask);
             }
         }
+
+        OnTimeout();
     }
     LOG_PRINT(log_debug, "epoll run end!");
 }
@@ -260,7 +304,7 @@ void CEpoll::Wake()
     m_pLock->Leave();
 }
 
-void CEpoll::onEvent(CBaseSocket * psocket, int mask)
+void CEpoll::OnEvent(CBaseSocket * psocket, int mask)
 {   
     LOG_PRINT(log_debug, "event on socket:%p, mask:%d", psocket, mask);
     
@@ -288,6 +332,31 @@ void CEpoll::onEvent(CBaseSocket * psocket, int mask)
     if (mask & EA_WRITABLE) {
         psocket->onWrite();
     }
+}
+
+void CEpoll::OnTimeout()
+{
+    size_t now = GetMilliSecond();
+
+    TimerContainer tmpC;
+    
+    m_pLock->Enter();
+    tmpC.swap(m_cTimers);
+    
+    while (tmpC.size() > 0) {
+        TimerContainer::iterator it = tmpC.begin();
+        if ((*it)->GetExpireTime() > now) {
+            break;
+        }
+        tmpC.erase(it);
+        (*it)->OnEvent(now);
+    }
+
+    if (tmpC.size() > 0) {
+        m_cTimers.insert(tmpC.begin(), tmpC.end());
+    }
+    m_pLock->Leave();
+
 }
 
 }
